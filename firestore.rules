@@ -1,0 +1,90 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper function to check if the authenticated user is an admin
+    function isAdmin() {
+      return request.auth != null && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // 🟢 Secure access to user data with schema enforcement
+    match /users/{userId} {
+      // Admins can read all users; regular users can only read their own document
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      
+      // Regular users write their own profiles (Flutter app logic)
+      allow create: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.keys().hasOnly([
+                      'full_name',
+                      'university',
+                      'level',
+                      'address',
+                      'phone_number',
+                      'avatarName',
+                    ])
+                    && request.resource.data.full_name is string
+                    && request.resource.data.full_name.size() <= 100
+                    && request.resource.data.university is string
+                    && request.resource.data.university.size() <= 100
+                    && request.resource.data.level is string
+                    && request.resource.data.level.size() <= 50
+                    && request.resource.data.address is string
+                    && request.resource.data.address.size() <= 200
+                    && request.resource.data.phone_number is string
+                    && request.resource.data.phone_number.size() <= 15
+                    && request.resource.data.avatarName is string
+                    && request.resource.data.avatarName.size() <= 50;
+      
+      allow update: if request.auth != null
+                    && request.auth.uid == userId
+                    && request.resource.data.keys().hasOnly([
+                      'full_name',
+                      'university',
+                      'level',
+                      'address',
+                      'phone_number',
+                      'avatarName',
+                    ])
+                    && request.resource.data.full_name is string
+                    && request.resource.data.full_name.size() <= 100
+                    && request.resource.data.university is string
+                    && request.resource.data.university.size() <= 100
+                    && request.resource.data.level is string
+                    && request.resource.data.level.size() <= 50
+                    && request.resource.data.address is string
+                    && request.resource.data.address.size() <= 200
+                    && request.resource.data.phone_number is string
+                    && request.resource.data.phone_number.size() <= 15
+                    && request.resource.data.avatarName is string
+                    && request.resource.data.avatarName.size() <= 50;
+
+      allow delete: if false; // Prevent client-side deletes
+    }
+
+    // 🟢 Secure webhook access
+    match /paymob_webhooks/{orderId} {
+      allow read: if request.auth != null && (resource.data.user_id == request.auth.uid || isAdmin());
+      allow write: if false; // Only backend can write
+    }
+
+    match /users/{userId}/daily_stats/{document} {
+      allow read, write: if request.auth != null && (request.auth.uid == userId || isAdmin());
+    }
+
+    // 🟢 User sessions
+    match /sessions/{userId} {
+      allow read, write: if request.auth != null && (request.auth.uid == userId || isAdmin());
+    }
+
+    // 🟢 Data users
+    match /data_users/{userId} {
+      allow read, write: if request.auth != null && (request.auth.uid == userId || isAdmin());
+    }
+
+    // 🔁 Catch-all for other collections
+    match /{document=**} {
+      allow read, write: if request.auth != null && isAdmin();
+    }
+  }
+}
