@@ -587,6 +587,10 @@ a:hover {
   background: linear-gradient(90deg, var(--color-info), #60a5fa);
 }
 
+.metric-card.metric-pink::before {
+  background: linear-gradient(90deg, #ec4899, #f472b6);
+}
+
 .metric-icon {
   display: flex;
   align-items: center;
@@ -616,6 +620,11 @@ a:hover {
 .metric-blue .metric-icon {
   background: rgba(59, 130, 246, 0.15);
   color: var(--color-info);
+}
+
+.metric-pink .metric-icon {
+  background: rgba(236, 72, 153, 0.15);
+  color: #ec4899;
 }
 
 .metric-value {

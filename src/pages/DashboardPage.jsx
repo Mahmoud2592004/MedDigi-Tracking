@@ -23,7 +23,7 @@ function ChartLoadingFallback() {
 }
 
 export default function DashboardPage() {
-  const { users, isLoading, isSyncing, lastSynced, error, triggerSync } = useDeltaSync();
+  const { users, isLoading, isSyncing, lastSynced, error, triggerSync, authUserCount } = useDeltaSync();
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [searchQuery, setSearchQuery] = useState('');
@@ -159,7 +159,7 @@ export default function DashboardPage() {
         {/* ========== DASHBOARD TAB ========== */}
         {activeTab === 'dashboard' && (
           <>
-            <MetricCards users={users} dateRange={dateRange} />
+            <MetricCards users={users} dateRange={dateRange} authUserCount={authUserCount} />
 
             <div className="controls-bar">
               <SearchBar searchQuery={searchQuery} onSearchChange={setSearchQuery} />
@@ -196,7 +196,7 @@ export default function DashboardPage() {
         {/* ========== USERS TAB ========== */}
         {activeTab === 'users' && (
           <>
-            <MetricCards users={users} dateRange={dateRange} />
+            <MetricCards users={users} dateRange={dateRange} authUserCount={authUserCount} />
 
             <div className="controls-bar">
               <SearchBar searchQuery={searchQuery} onSearchChange={setSearchQuery} />
@@ -209,7 +209,7 @@ export default function DashboardPage() {
         {/* ========== ANALYTICS TAB ========== */}
         {activeTab === 'analytics' && (
           <>
-            <MetricCards users={users} dateRange={dateRange} />
+            <MetricCards users={users} dateRange={dateRange} authUserCount={authUserCount} />
 
             <div className="section-grid">
               <div className="section-card glass-card full-width">

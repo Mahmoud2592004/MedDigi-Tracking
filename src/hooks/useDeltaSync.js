@@ -77,6 +77,7 @@ export function useDeltaSync() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSynced, setLastSynced] = useState(null);
   const [error, setError] = useState(null);
+  const [authUserCount, setAuthUserCount] = useState(null);
   const autoSyncTimerRef = useRef(null);
 
   /**
@@ -180,6 +181,19 @@ export function useDeltaSync() {
     setError(null);
 
     try {
+      // Fetch Auth User Count in background
+      try {
+        const { getFunctions, httpsCallable } = await import('firebase/functions');
+        const fns = getFunctions(db.app);
+        const getAuthUserCountFn = httpsCallable(fns, 'getAuthUserCount');
+        const res = await getAuthUserCountFn();
+        if (res.data && typeof res.data.count === 'number') {
+          setAuthUserCount(res.data.count);
+        }
+      } catch (err) {
+        console.warn('Could not fetch Auth user count (Cloud Function getAuthUserCount might not be deployed yet):', err.message);
+      }
+
       const lastTimestamp = await getLastSyncTimestamp();
 
       if (!lastTimestamp) {
@@ -307,5 +321,6 @@ export function useDeltaSync() {
     error,
     triggerSync,
     hardReset,
+    authUserCount,
   };
 }

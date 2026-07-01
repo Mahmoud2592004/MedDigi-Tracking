@@ -1,6 +1,6 @@
 import { useMemo, memo } from 'react';
 
-function MetricCards({ users, dateRange }) {
+function MetricCards({ users, dateRange, authUserCount }) {
   const totalUsers = users.length;
 
   const activeUsersInRange = useMemo(() => {
@@ -47,7 +47,15 @@ function MetricCards({ users, dateRange }) {
       <div className="metric-card glass-card metric-teal">
         <div className="metric-icon">👥</div>
         <div className="metric-value">{totalUsers.toLocaleString()}</div>
-        <div className="metric-label">Total Registered Users</div>
+        <div className="metric-label">Firestore User Profiles</div>
+      </div>
+
+      <div className="metric-card glass-card metric-pink">
+        <div className="metric-icon">🔑</div>
+        <div className="metric-value">
+          {authUserCount !== null ? authUserCount.toLocaleString() : 'N/A'}
+        </div>
+        <div className="metric-label">Firebase Auth Accounts</div>
       </div>
 
       <div className="metric-card glass-card metric-purple">
