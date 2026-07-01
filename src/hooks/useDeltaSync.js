@@ -49,6 +49,7 @@ function serializeDoc(doc) {
     pharmacy_name: data.pharmacy_name || '',
     role: data.role || '',
     state: data.state || '',
+    updated_state: data.updated_state || '',
     location: data.location || '',
     created_at: timestampToISO(data.created_at),
     last_activity: timestampToISO(data.last_activity),
