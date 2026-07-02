@@ -1,5 +1,7 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
+const functions = require('firebase-functions/v1');
 admin.initializeApp();
 
 exports.getAuthUserCount = onCall(async (request) => {
@@ -138,3 +140,60 @@ exports.resolveUserStatesDaily = onSchedule({
 
     logger.info('Daily state resolution batch completed successfully.');
 });
+
+exports.onUserWrite = onDocumentWritten("users/{userId}", async (event) => {
+    const db = admin.firestore();
+    const userId = event.params.userId;
+    const change = event.data;
+
+    let type = 'update';
+    if (change.before.exists && !change.after.exists) {
+        type = 'delete';
+    }
+
+    logger.info(`User ${userId} was ${type}d. Writing sync change log entry.`);
+
+    try {
+        await db.collection('sync_changes').add({
+            userId: userId,
+            type: type,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+    } catch (err) {
+        logger.error(`Failed to write sync change log for user ${userId}:`, err);
+    }
+});
+
+exports.onAuthUserCreated = functions.auth.user().onCreate(async (user) => {
+    const db = admin.firestore();
+    logger.info(`Auth user created: ${user.uid}. Logging sync update.`);
+    try {
+        await db.collection('sync_changes').add({
+            userId: user.uid,
+            type: 'update',
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+    } catch (err) {
+        logger.error(`Failed to log auth user creation for ${user.uid}:`, err);
+    }
+});
+
+exports.onAuthUserDeleted = functions.auth.user().onDelete(async (user) => {
+    const db = admin.firestore();
+    logger.info(`Auth user deleted: ${user.uid}. Deleting Firestore profile and logging deletion.`);
+    try {
+        // 1. Delete Firestore user profile document
+        await db.collection('users').doc(user.uid).delete();
+
+        // 2. Add deletion entry to sync_changes log
+        await db.collection('sync_changes').add({
+            userId: user.uid,
+            type: 'delete',
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+    } catch (err) {
+        logger.error(`Failed to handle auth user deletion for ${user.uid}:`, err);
+    }
+});
+
+

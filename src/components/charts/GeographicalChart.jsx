@@ -15,7 +15,7 @@ function GeographicalChart({ users }) {
 
     const stateMap = new Map();
     for (const u of users) {
-      const state = (u.state || '').trim();
+      const state = (u.updated_state || u.state || '').trim();
       if (state) {
         stateMap.set(state, (stateMap.get(state) || 0) + 1);
       }

@@ -6,6 +6,7 @@ import {
   orderBy,
   getDocs,
   Timestamp,
+  limit,
 } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import {
@@ -15,6 +16,10 @@ import {
   setLastSyncTimestamp,
   getLastSyncDate,
   clearCache,
+  syncAllCachedUsers,
+  deleteUsers,
+  getCachedAuthUserCount,
+  setCachedAuthUserCount,
 } from '../services/indexedDB';
 
 const USERS_COLLECTION = 'users';
@@ -82,6 +87,24 @@ export function useDeltaSync() {
   const autoSyncTimerRef = useRef(null);
 
   /**
+   * Fetches the Firebase Auth account count in the background and caches it.
+   */
+  const fetchAuthCount = useCallback(async () => {
+    try {
+      const { getFunctions, httpsCallable } = await import('firebase/functions');
+      const fns = getFunctions(db.app);
+      const getAuthUserCountFn = httpsCallable(fns, 'getAuthUserCount');
+      const res = await getAuthUserCountFn();
+      if (res.data && typeof res.data.count === 'number') {
+        setAuthUserCount(res.data.count);
+        await setCachedAuthUserCount(res.data.count);
+      }
+    } catch (err) {
+      console.warn('Could not fetch Auth user count:', err.message);
+    }
+  }, []);
+
+  /**
    * Fetches ALL documents (initial full load).
    */
   const fullFetch = useCallback(async () => {
@@ -123,20 +146,36 @@ export function useDeltaSync() {
     const q = query(usersRef, orderBy('created_at', 'asc'));
     
     try {
+      // 1. Fetch latest watermark from sync_changes
+      let latestWatermark = new Date().toISOString();
+      try {
+        const changesRef = collection(db, 'sync_changes');
+        const qLatest = query(changesRef, orderBy('timestamp', 'desc'), limit(1));
+        const snapLatest = await getDocs(qLatest);
+        if (!snapLatest.empty) {
+          const latestDocData = snapLatest.docs[0].data();
+          if (latestDocData.timestamp) {
+            latestWatermark = timestampToISO(latestDocData.timestamp);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch latest change watermark, falling back to current time:', err.message);
+      }
+
       console.log('Executing getDocs for query:', q);
       const snapshot = await getDocs(q);
       console.log(`Query succeeded. Fetched ${snapshot.size} documents.`);
       
       const docs = snapshot.docs.map(serializeDoc);
 
-      // Cache everything
-      await putUsers(docs);
+      // Cache everything using smart sync
+      await syncAllCachedUsers(docs);
 
-      // Store the latest created_at as the sync watermark
-      if (docs.length > 0) {
-        const latestTimestamp = docs[docs.length - 1].created_at;
-        await setLastSyncTimestamp(latestTimestamp);
-      }
+      // Store the latest watermark
+      await setLastSyncTimestamp(latestWatermark);
+
+      // Fetch auth count in background
+      fetchAuthCount();
 
       return docs;
     } catch (err) {
@@ -146,32 +185,101 @@ export function useDeltaSync() {
       console.error('Error Stack:', err.stack);
       throw err;
     }
-  }, []);
+  }, [fetchAuthCount]);
 
   /**
-   * Delta fetch: only documents created after the last sync timestamp.
+   * Delta fetch: query sync_changes and fetch/update only changed records in IndexedDB.
    */
   const deltaFetch = useCallback(async (lastTimestamp) => {
     const lastDate = new Date(lastTimestamp);
     const firestoreTimestamp = Timestamp.fromDate(lastDate);
 
-    const usersRef = collection(db, USERS_COLLECTION);
+    // 1. Query the change log
+    const changesRef = collection(db, 'sync_changes');
     const q = query(
-      usersRef,
-      where('created_at', '>', firestoreTimestamp),
-      orderBy('created_at', 'asc')
+      changesRef,
+      where('timestamp', '>', firestoreTimestamp),
+      orderBy('timestamp', 'asc')
     );
     const snapshot = await getDocs(q);
 
-    const newDocs = snapshot.docs.map(serializeDoc);
-
-    if (newDocs.length > 0) {
-      await putUsers(newDocs);
-      const latestTimestamp = newDocs[newDocs.length - 1].created_at;
-      await setLastSyncTimestamp(latestTimestamp);
+    if (snapshot.empty) {
+      return { updated: [], deleted: [], fullSyncRequired: false };
     }
 
-    return newDocs;
+    // 2. Aggregate changes chronologically
+    const statusMap = new Map(); // userId -> 'update' | 'delete'
+    let latestWatermark = lastTimestamp;
+
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data();
+      if (data.userId) {
+        statusMap.set(data.userId, data.type);
+      }
+      if (data.timestamp) {
+        latestWatermark = timestampToISO(data.timestamp);
+      }
+    }
+
+    // 3. If change volume is large, signal for full sync
+    if (statusMap.size >= 25) {
+      console.log(`Delta fetch found ${statusMap.size} unique user changes. Triggering full resync.`);
+      return { fullSyncRequired: true };
+    }
+
+    const updatedIds = [];
+    const deletedIds = [];
+    for (const [userId, type] of statusMap.entries()) {
+      if (type === 'delete') {
+        deletedIds.push(userId);
+      } else {
+        updatedIds.push(userId);
+      }
+    }
+
+    // 4. Apply deletions to local cache
+    if (deletedIds.length > 0) {
+      await deleteUsers(deletedIds);
+    }
+
+    // 5. Fetch updated/new documents from Firestore in parallel
+    const updatedDocs = [];
+    if (updatedIds.length > 0) {
+      const { doc, getDoc } = await import('firebase/firestore');
+      const fetchPromises = updatedIds.map(async (id) => {
+        try {
+          const userSnap = await getDoc(doc(db, USERS_COLLECTION, id));
+          if (userSnap.exists()) {
+            return serializeDoc(userSnap);
+          } else {
+            // Treat as deleted if it doesn't exist in Firestore anymore
+            deletedIds.push(id);
+            return null;
+          }
+        } catch (err) {
+          console.error(`Error fetching updated user ${id}:`, err);
+          return null;
+        }
+      });
+      const fetched = await Promise.all(fetchPromises);
+      for (const u of fetched) {
+        if (u) updatedDocs.push(u);
+      }
+    }
+
+    // 6. Apply updates to local cache
+    if (updatedDocs.length > 0) {
+      await putUsers(updatedDocs);
+    }
+
+    // 7. Update local watermark
+    await setLastSyncTimestamp(latestWatermark);
+
+    return {
+      updated: updatedDocs,
+      deleted: deletedIds,
+      fullSyncRequired: false
+    };
   }, []);
 
   /**
@@ -183,17 +291,7 @@ export function useDeltaSync() {
 
     try {
       // Fetch Auth User Count in background
-      try {
-        const { getFunctions, httpsCallable } = await import('firebase/functions');
-        const fns = getFunctions(db.app);
-        const getAuthUserCountFn = httpsCallable(fns, 'getAuthUserCount');
-        const res = await getAuthUserCountFn();
-        if (res.data && typeof res.data.count === 'number') {
-          setAuthUserCount(res.data.count);
-        }
-      } catch (err) {
-        console.warn('Could not fetch Auth user count (Cloud Function getAuthUserCount might not be deployed yet):', err.message);
-      }
+      fetchAuthCount();
 
       const lastTimestamp = await getLastSyncTimestamp();
 
@@ -202,18 +300,28 @@ export function useDeltaSync() {
         const allDocs = await fullFetch();
         setUsers(allDocs);
       } else {
-        // Delta fetch — only new documents
-        const newDocs = await deltaFetch(lastTimestamp);
+        // Delta fetch — only new/modified/deleted documents
+        const result = await deltaFetch(lastTimestamp);
 
-        if (newDocs.length > 0) {
-          setUsers((prev) => {
-            // Merge, deduplicating by ID
-            const existingMap = new Map(prev.map((u) => [u.id, u]));
-            for (const doc of newDocs) {
-              existingMap.set(doc.id, doc);
-            }
-            return Array.from(existingMap.values());
-          });
+        if (result.fullSyncRequired) {
+          const allDocs = await fullFetch();
+          setUsers(allDocs);
+        } else {
+          const { updated, deleted } = result;
+          if (updated.length > 0 || deleted.length > 0) {
+            setUsers((prev) => {
+              const userMap = new Map(prev.map((u) => [u.id, u]));
+              // Remove deleted ones
+              for (const id of deleted) {
+                userMap.delete(id);
+              }
+              // Update/insert updated ones
+              for (const u of updated) {
+                userMap.set(u.id, u);
+              }
+              return Array.from(userMap.values());
+            });
+          }
         }
       }
 
@@ -225,7 +333,7 @@ export function useDeltaSync() {
     } finally {
       setIsSyncing(false);
     }
-  }, [fullFetch, deltaFetch]);
+  }, [fullFetch, deltaFetch, fetchAuthCount]);
 
   /**
    * Hard reset: clears all cache and re-fetches everything.
@@ -260,11 +368,13 @@ export function useDeltaSync() {
         // 1. Load from cache immediately
         const cachedUsers = await getAllCachedUsers();
         const lastSyncDate = await getLastSyncDate();
+        const cachedAuthCount = await getCachedAuthUserCount();
 
         if (cachedUsers.length > 0) {
           if (!cancelled) {
             setUsers(cachedUsers);
             setLastSynced(lastSyncDate);
+            setAuthUserCount(cachedAuthCount);
             setIsLoading(false);
           }
 

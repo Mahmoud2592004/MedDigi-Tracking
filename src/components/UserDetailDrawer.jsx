@@ -202,13 +202,13 @@ function UserDetailDrawer({ user, onClose }) {
             <div className="detail-row">
               <span className="detail-label">State</span>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
-                <span className="detail-value">{user.state || '—'}</span>
+                <span className="detail-value">{user.updated_state || user.state || '—'}</span>
                 {isResolving && (
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                     Resolving correct state…
                   </span>
                 )}
-                {!isResolving && resolvedState && resolvedState.trim() !== (user.state || '').trim() && (
+                {!isResolving && resolvedState && resolvedState.trim() !== (user.updated_state || user.state || '').trim() && (
                   <span 
                     title="Resolved via OpenStreetMap Nominatim"
                     style={{ fontSize: '0.75rem', color: 'var(--accent-primary)', fontWeight: '600' }}

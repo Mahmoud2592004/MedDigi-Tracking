@@ -86,7 +86,7 @@ function UsersTable({ users, onUserClick }) {
                   <div className="table-cell">
                     <span className="role-badge">{user.role || '—'}</span>
                   </div>
-                  <div className="table-cell">{user.state || '—'}</div>
+                  <div className="table-cell">{user.updated_state || user.state || '—'}</div>
                   <div className="table-cell">
                     <button
                       className="view-btn"
